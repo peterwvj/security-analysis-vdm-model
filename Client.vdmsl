@@ -1,0 +1,45 @@
+module Client
+
+exports all
+imports from Time
+  types
+    Time renamed Time
+definitions
+
+types
+
+ClientId = nat;
+
+UserId = nat;
+
+User ::
+  -- Client users must be unique
+  id : UserId;
+
+Password = seq1 of char;
+
+Secret = seq1 of char;
+
+Role = <Review> | <UploadFirmware>;
+
+Token ::
+  userId : UserId
+  clientId : ClientId
+  issueTime : Time
+  expirationTime : Time
+  roles : set1 of Role
+  inv t == t.issueTime < t.expirationTime;
+
+Client ::
+  -- Multiple (unique) clients may access the system
+  id : ClientId
+  user : [User]
+  tok : [Token]
+inv mk_Client(id, -, tok) == clientGuard(id, tok);
+
+functions
+
+clientGuard : ClientId * [Token] -> bool
+clientGuard (id, tok) == tok <> nil => id = tok.clientId;
+
+end Client

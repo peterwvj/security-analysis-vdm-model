@@ -1,0 +1,67 @@
+module Platform
+
+imports from Communication
+  types
+    Firmware renamed Firmware
+  functions
+    isValid renamed isValid
+exports
+  types
+    struct Platform
+    struct Gateway
+    struct OT
+    struct CN
+    struct PlatformId
+  functions
+    consOts : set1 of OT * Firmware -> set1 of OT
+definitions
+
+types
+
+PlatformId = nat;
+
+-- The cloud may be associated with multiple platforms
+Platform ::
+  activeOt : OT
+  gw : Gateway
+  backupOts : set1 of OT
+  cn : CN
+inv mk_Platform(activeOt, -, backupOts, cn) ==
+  -- OTs must have different IDs per platform
+  (forall o1, o2 in set backupOts & o1 <> o2 => o1.id <> o2.id) and
+  otsHaveSameFirmware({activeOt} union backupOts) and
+  -- Control network firmware is the same as the OT firmware backup
+  let o in set {activeOt} union backupOts in o.fwBackup = cn.fwInstalled
+  ;
+
+Gateway ::
+  -- ID is not needed (each platform only has a single gateway)
+  inwardsOpen : bool;
+
+OT ::
+  -- ID is needed (a platform may have multiple OTs)
+  id : nat
+  -- The firmware update (or storage)
+  fwUpdate : [Firmware]
+  -- Backup of the installed firmware (in case the control network fails)
+  fwBackup : Firmware
+inv mk_OT(-, fwUpdate, fwBackup) ==
+  (fwUpdate = nil or isValid(fwUpdate)) and isValid(fwBackup);
+
+CN ::
+  -- ID is not needed (each platform only has a single control network)
+  fwInstalled : Firmware;
+
+functions
+
+consOts : set1 of OT * Firmware -> set1 of OT
+consOts (ots, firmware) == {mk_OT(o.id, firmware, o.fwBackup) | o in set ots}
+post card ots = card RESULT and
+     forall mk_OT(id, -, fwBackup) in set ots & mk_OT(id, firmware, fwBackup) in set RESULT;
+
+otsHaveSameFirmware : set of OT -> bool
+otsHaveSameFirmware (ots) ==
+(let o1 in set ots in forall o2 in set ots & o1.fwBackup = o2.fwBackup) and
+(let o1 in set ots in forall o2 in set ots & o1.fwUpdate = o2.fwUpdate);
+
+end Platform

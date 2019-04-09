@@ -1,0 +1,111 @@
+module BasicFunctionality
+
+imports
+from System
+  operations
+    addUser renamed addUser
+    addClient renamed addClient
+    performLogin renamed performLogin
+    getSystemState renamed getSystemState
+    fetchData renamed fetchData
+    viewData renamed viewData
+    openGateway renamed openGateway
+    uploadFirmware renamed uploadFirmware
+    installFirmware renamed installFirmware
+  functions
+    performLoginGuard renamed performLoginGuard
+    viewDataGuard renamed viewDataGuard
+    uploadFirmwareGuard renamed uploadFirmwareGuard,
+from Client
+  types
+    Client renamed Client
+    Password renamed Password
+    Secret renamed Secret,
+from Communication
+  types
+    DataResponse renamed DataResponse
+    Firmware renamed Firmware
+    FirmwareStatusCode renamed FirmwareStatusCode,
+from UnitTesting
+  values
+    user1Pwd renamed user1Pwd
+    client1Secret renamed client1Secret
+    user1Id renamed user1Id
+    user1Roles renamed user1Roles
+    client1Id renamed client1Id
+    client1 renamed client1
+    client2 renamed client2
+    passwords renamed passwords
+    secrets renamed secrets
+    roles renamed roles
+    platformId renamed platformId
+exports
+  operations
+    loginCurrentClient : Client * Password * Secret ==> ()
+    uploadFirmwareCurrentClient : Firmware * nat ==> FirmwareStatusCode
+    viewDataCurrentClient : () ==> DataResponse
+definitions
+
+state State of
+  currentClient : [Client]
+init s == s = mk_State(nil)
+end
+
+operations
+
+loginCurrentClient : Client * Password * Secret ==> ()
+loginCurrentClient (client, pwd, secret) ==
+  currentClient := performLogin(client, pwd, secret)
+pre performLoginGuard(client, pwd, secret, getSystemState());
+
+viewDataCurrentClient : () ==> DataResponse
+viewDataCurrentClient () ==
+  viewData(currentClient.tok)
+pre currentClient <> nil and viewDataGuard(getSystemState());
+
+uploadFirmwareCurrentClient : Firmware * nat ==> FirmwareStatusCode
+uploadFirmwareCurrentClient (firmware, pid) ==
+  uploadFirmware(currentClient.tok, firmware, pid)
+pre currentClient <> nil and uploadFirmwareGuard();
+
+traces
+
+LoginAttempts:
+let pwd in set {user1Pwd, "wrong_password"}
+in
+  let sec in set {client1Secret, "wrong_secret"}
+  in
+  (
+    (addUser(user1Id, user1Pwd, user1Roles);
+     addClient(client1Id, client1Secret)){0,1};
+    performLogin(client1, pwd, sec)
+  );
+
+ExpiredToken:
+(
+  addUser(user1Id, user1Pwd, user1Roles);
+  addClient(client1Id, client1Secret);
+  fetchData();
+  loginCurrentClient(client1, user1Pwd, client1Secret);
+  viewDataCurrentClient(){1,10}
+);
+
+MaliciousFirmware:
+let client in set {client1, client2}
+in
+  let pwd = passwords(client.user.id),
+      secret = secrets(client.id),
+      userRoles = roles(client.user.id)
+  in
+  (
+    addUser(client.user.id, pwd, userRoles){0,1};
+    addClient(client.id, secret){0,1};
+    loginCurrentClient(client, pwd, secret){0,1};
+    openGateway(platformId){0,1};
+    let fw : Firmware
+    in
+      uploadFirmwareCurrentClient(fw, platformId);
+    installFirmware(platformId){0,1}
+  );
+
+end BasicFunctionality

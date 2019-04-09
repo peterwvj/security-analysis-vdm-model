@@ -1,0 +1,127 @@
+module Scalability
+
+imports
+from UnitTesting
+  values
+    clients renamed clients
+    client1 renamed client1
+    client2 renamed client2
+    client3 renamed client3
+    passwords renamed passwords
+    secrets renamed secrets
+    roles renamed roles
+    platformId renamed platformId,
+from Client
+  types
+    UserId renamed UserId
+    Password renamed Password
+    Role renamed Role
+    ClientId renamed ClientId
+    Secret renamed Secret,
+from Communication
+  types
+    Firmware renamed Firmware,
+from System
+  operations
+    addUser_ renamed addUser_
+    addClient_ renamed addClient_
+    openGateway renamed openGateway
+    fetchData renamed fetchData
+    installFirmware renamed installFirmware,
+from BasicFunctionality
+  operations
+    loginCurrentClient renamed loginCurrentClient
+    uploadFirmwareCurrentClient renamed uploadFirmwareCurrentClient
+    viewDataCurrentClient renamed viewDataCurrentClient
+definitions
+
+functions
+
+consUserData : UserId -> UserId * Password * set1 of Role
+consUserData (userId) ==
+  mk_(userId, passwords(userId), roles(userId));
+
+consClientData : ClientId -> ClientId * Secret
+consClientData (clientId) ==
+  mk_(clientId, secrets(clientId));
+
+values
+
+user1Data = consUserData(client1.user.id);
+user2Data = consUserData(client2.user.id);
+user3Data = consUserData(client3.user.id);
+
+userData = {user1Data, user2Data, user3Data};
+
+client1Data = consClientData(client1.id);
+client2Data = consClientData(client2.id);
+client3Data = consClientData(client3.id);
+
+clientData = {client1Data, client2Data, client3Data};
+
+operations
+
+setup : () ==> ()
+setup () ==
+(
+  for all u in set userData do
+    addUser_(u);
+  for all c in set clientData do
+    addClient_(c);
+)
+
+traces
+
+-- Permutations with repetitions (PR) can be calculated as follows:
+--
+-- PR = @(n,r)(n .^ r);
+--
+-- where
+-- n is the number of elements to choose from and
+-- r is number of elements chosen
+--
+-- Let C be the number of clients and N the number of times the tests
+-- are repeated. Then the number of tests produced by the trace (TC)
+-- is given by:
+--
+-- TC = @(C,N)(C* sum(PR(9, [1:N])))
+--
+-- Examples:
+--
+-- >> TC(3,1)
+-- ans =  27
+-- >> TC(3,2)
+-- ans =  270
+-- >> TC(3,3)
+-- ans =  2457
+-- >> TC(3,4)
+-- ans =  22140
+-- >> TC(3,5)
+-- ans =  199287
+-- >> TC(3,6)
+-- ans =  1793610
+-- >> TC(3,7)
+-- ans =  16142517
+Scalability:
+
+-- 𝑃(𝑛,𝑟) = 𝑃(6,6) = 720
+(
+  setup();
+  let c in set clients
+  in
+  (
+    fetchData();
+    loginCurrentClient(c, passwords(c.user.id), secrets(c.id));
+    openGateway(platformId);
+    (
+      viewDataCurrentClient() |
+      ( let fw : Firmware
+        in
+          uploadFirmwareCurrentClient(fw, platformId);
+        installFirmware(platformId))
+
+    ){1,2}
+  )
+)
+
+end Scalability

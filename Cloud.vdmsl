@@ -1,0 +1,66 @@
+module Cloud
+
+exports all
+imports
+from Client
+  types
+    UserId renamed UserId
+    Password renamed Password
+    ClientId renamed ClientId
+    Client renamed Client
+    Secret renamed Secret
+    Role renamed Role,
+from Platform
+  types
+    Platform renamed Platform
+    PlatformId renamed PlatformId,
+from Communication
+  types
+    Data renamed Data    
+definitions
+
+types
+
+Cloud ::
+  -- Logged in clients  
+  activeClients : set of Client
+  -- Users known to the system
+  validUsers : map UserId to Password
+  -- Clients known to the system
+  validClients : map ClientId to Secret
+  -- User roles
+  userRoles : map UserId to set of Role
+  -- ID is not needed (the system only has a single cloud)
+  platforms : map PlatformId to Platform
+  -- Data snapshots, stpres data from OT
+  dataSnapshots : seq of Data
+inv mk_Cloud(activeClients, validUsers, validClients, userRoles, platforms, -) ==
+  forall u1, u2 in set {c.user | c in set activeClients} & u1 <> u2 => u1.id <> u2.id and
+  forall x, y in set activeClients & x <> y => x.id <> y.id and
+  -- The OT must be part of exactly one platform ...
+  card dunion {platforms(id).backupOts union {platforms(id).activeOt} | id in set dom platforms} = noOfOts(rng platforms) and
+  -- .. so must the gateway ...
+  card {p.gw | p in set rng platforms} = card rng platforms and
+  -- The same users must exist in the two maps
+  dom validUsers = dom userRoles and
+  -- Users must have roles
+  forall userId in set dom userRoles & userRoles(userId) <> {} and
+  -- Active clients form a subset of all known clients
+  {c.id | c in set activeClients} subset dom validClients and
+  -- ... and the control network
+  card {p.cn | p in set rng platforms} = card rng platforms;
+
+functions
+
+noOfOts : set of Platform -> nat
+noOfOts (platforms) ==
+if platforms = {} then
+  0
+else
+  let p in set platforms
+  in
+    -- Add 1 for the active OT
+    1 + card p.backupOts + noOfOts(platforms \ {p})
+measure card platforms;
+
+end Cloud

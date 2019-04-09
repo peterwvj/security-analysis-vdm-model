@@ -1,0 +1,68 @@
+module Communication
+
+exports
+  types
+    struct Data
+    struct Firmware
+    struct DataResponse
+    struct FirmwareStatusCode
+  functions
+    isValid : Firmware -> bool
+    consValidFirmware : () -> Firmware
+    computeFirmwareStatus : Firmware -> FirmwareStatusCode
+definitions
+
+types
+
+Firmware ::
+  -- Indicates whether the firmware has a valid signature
+  validSig : bool
+  -- Indicates whether the firmware is genuine
+  genuine : bool
+  -- Indicates whether the firmware fits the OT storage
+  size : bool;
+
+PermissionErrors = <NoPermission> | <InvalidToken>;
+
+StatusCode = <NoError> | PermissionErrors;
+
+FirmwareStatusCode = <Valid> | <InvalidSignature>  | <NotGenuine> |
+  <InsufficientStorage> | <GatewayClosed> | PermissionErrors;
+
+-- FirmwareStatusCode = nat
+-- inv s == s in set ValidStatusCodes;
+
+-- ErrorCode = nat
+-- inv e == e in set ValidErrorCodes;
+
+DataResponse ::
+  code : StatusCode
+  data : [Data]
+inv mk_DataResponse(c,d) ==
+  (c <> <NoError> => d = nil) and
+  (c = <NoError> => d <> nil);
+
+Data = nat;
+
+functions
+
+isValid : Firmware -> bool
+isValid (fw) == fw.validSig and fw.genuine and fw.size;
+
+consValidFirmware : () -> Firmware
+consValidFirmware () == mk_Firmware(true, true, true);
+
+computeFirmwareStatus : Firmware -> FirmwareStatusCode
+computeFirmwareStatus (firmware) ==
+if firmware.validSig then
+  if firmware.genuine then
+    if firmware.size then
+      <Valid>
+    else
+      <InsufficientStorage>
+  else
+    <NotGenuine>
+else
+  <InvalidSignature>;
+
+end Communication

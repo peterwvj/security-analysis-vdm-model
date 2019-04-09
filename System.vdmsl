@@ -1,0 +1,400 @@
+module System
+
+exports
+  operations
+    addUser : UserId * Password * set1 of Role ==> ()
+    addUser_ : (UserId * Password * set1 of Role) ==> ()
+    addClient : ClientId * Secret ==> ()
+    addClient_ : (ClientId * Secret) ==> ()
+    addPlatform : PlatformId * Platform ==> ()
+    performLogin : Client * Password * Secret ==> [Client]
+    resetState : () ==> ()
+    viewData : Token ==> DataResponse
+    uploadFirmware : Token * Firmware * nat ==> FirmwareStatusCode
+    openGateway : nat ==> ()
+    installFirmware : PlatformId ==> ()
+    fetchData : () ==> ()
+    advanceTime : Time ==> ()
+    getSystemState : () ==> State
+  functions
+    viewDataGuard : State -> bool
+    performLoginGuard : Client * Password * Secret * State -> bool
+    uploadFirmwareGuard : () -> bool
+imports
+from Client
+  types
+    Token renamed Token
+    UserId renamed UserId
+    Password renamed Password
+    ClientId renamed ClientId
+    Secret renamed Secret
+    Role renamed Role
+    Client renamed Client,
+from Cloud
+  types
+    Cloud renamed Cloud,
+from Time
+  types
+    Time renamed Time
+    Durations renamed Durations
+  values
+    DEFAULT_EXPIRATION_OFFSET renamed DEFAULT_EXPIRATION_OFFSET
+    VIEW_DATA_DURATION renamed VIEW_DATA_DURATION
+    PERFORM_LOGIN_DURATION renamed PERFORM_LOGIN_DURATION
+    UPLOAD_FIRMWARE_DURATION renamed UPLOAD_FIRMWARE_DURATION
+    INSTALL_FIRMWARE_DURATION renamed INSTALL_FIRMWARE_DURATION,
+from Communication
+  types
+    Data renamed Data
+    DataResponse renamed DataResponse
+    Firmware renamed Firmware
+    FirmwareStatusCode renamed FirmwareStatusCode
+  functions
+    isValid renamed isValid
+    consValidFirmware renamed consValidFirmware
+    computeFirmwareStatus renamed computeFirmwareStatus,
+from Platform
+  types
+    Platform renamed Platform
+    Gateway renamed Gateway
+    OT renamed OT
+    CN renamed CN
+    PlatformId renamed PlatformId
+  functions
+    consOts renamed consOts
+definitions
+
+state State of
+  cloud : Cloud
+  time : Time
+  expirationTimeOffset : Time
+  durations : Durations
+  dataCounter : Data
+inv mk_State(cloud, time, -, -, -) ==
+  -- Note: we do allow one user to use multiple clients
+  -- Note: Platform uniqueness is a constraint imposed by the cloud
+  -- Valid tokens must be removed
+  forall c in set cloud.activeClients & (c.tok <> nil and time < c.tok.expirationTime)
+init x == x = consDefaultState()
+  
+end
+
+functions
+
+-- The default configuration consists of one active OT, one backup OT,
+-- one cloud, one platform that has a closed gateway, and a control
+-- network. The OTs have no firmware update but keep a backup of a
+-- valid piece of firmware installed in the control network. All time
+-- durations assume default values and time starts at 0.
+
+consDefaultState : () -> State
+consDefaultState () ==
+let fwInstalled = consValidFirmware(),
+      activeOt = mk_OT(1, nil, fwInstalled),
+      backupOt = mk_OT(2, nil, fwInstalled),
+      time = 0,
+      platform = mk_Platform(activeOt, mk_Gateway(false), {backupOt}, mk_CN(fwInstalled)),
+      cloud = mk_Cloud({}, {|->}, {|->}, {|->}, {1 |-> platform},[]),
+      durations = mk_Durations(DEFAULT_EXPIRATION_OFFSET,
+                               VIEW_DATA_DURATION,
+                               PERFORM_LOGIN_DURATION,
+                               UPLOAD_FIRMWARE_DURATION,
+                               INSTALL_FIRMWARE_DURATION),
+      dataCounter = 0
+  in
+    mk_State(cloud, time, DEFAULT_EXPIRATION_OFFSET, durations, dataCounter);
+
+sameStatesExceptForTime : State * State -> bool
+sameStatesExceptForTime (s1, s2) ==
+let mk_State(c1, -, e1, dur1, dc1) = s1,
+    mk_State(c2, -, e2, dur2, dc2) = s2
+in
+  c1 = c2 and e1 = e2 and dur1 = dur2 and dc1 = dc2;
+
+viewDataGuard : State -> bool
+viewDataGuard (s) == pre_getCloudData(s);
+
+performLoginGuard : Client * Password * Secret * State -> bool
+performLoginGuard (client, pwd, secret, s) ==
+client.id in set dom s.cloud.validClients and
+    client not in set s.cloud.activeClients and
+    pre_consToken(client.user.id, pwd, client.id, secret, s);
+
+uploadFirmwareGuard : () -> bool
+uploadFirmwareGuard () == true;
+
+operations
+
+performLogin : Client * Password * Secret ==> [Client]
+performLogin (client, pwd, secret) ==
+(
+  dcl tok : [Token] := consToken(client.user.id, pwd, client.id, secret);
+  dcl nc : [Client] := nil;
+  if tok <> nil then
+  (
+    nc := mk_Client(client.id, client.user, tok);
+    cloud.activeClients := cloud.activeClients union {nc};
+  );
+  advanceTime(durations.performLogin);
+  return nc;
+)
+pre performLoginGuard(client, pwd, secret, State)
+post time~ + durations.performLogin = time and
+     (RESULT <> nil => RESULT in set cloud.activeClients);
+
+openGateway : nat ==> ()
+openGateway (platformId) ==
+  cloud.platforms(platformId).gw.inwardsOpen := true
+pre platformId in set dom cloud.platforms and
+    not cloud.platforms(platformId).gw.inwardsOpen;
+
+pure canAuthenticate : UserId * Password ==> bool
+canAuthenticate (userId, pwd) ==
+  return userId in set dom cloud.validUsers and pwd = cloud.validUsers(userId);
+
+pure canAuthorise : ClientId * Secret ==> bool
+canAuthorise (clientId, secret) ==
+  return clientId in set dom cloud.validClients and secret = cloud.validClients(clientId);
+
+pure consToken : UserId * Password * ClientId * Secret ==> [Token]
+consToken (userId, pwd, clientId, secret) ==
+  if canAuthenticate(userId, pwd) and canAuthorise(clientId, secret) then
+    return  mk_Token(userId, clientId, time, time + expirationTimeOffset, cloud.userRoles(userId))
+  else
+    return nil
+-- This does allow clients that are already logged in to request a new
+-- token although this makes little sense.
+pre userId in set dom cloud.userRoles
+post time~ = time;
+
+genData : () ==> Data
+genData () ==
+let data = dataCounter
+in
+(
+  dataCounter := dataCounter + 1;
+  return data;
+)
+post time~ = time;
+
+advanceTime : Time ==> ()
+advanceTime (increment) ==
+let nextTime = time + increment
+in
+  atomic
+  (
+    time := nextTime;
+    -- Remove expired tokens
+    cloud.activeClients := cloud.activeClients \ {c | c in set cloud.activeClients & c.tok.expirationTime <= nextTime}
+  )
+post time~ + increment = time and
+     {c | c in set cloud~.activeClients & c.tok.expirationTime <= time} union cloud.activeClients = cloud~.activeClients;
+
+getCloudData : () ==> Data
+getCloudData() ==
+  return cloud.dataSnapshots(len cloud.dataSnapshots)
+pre cloud.dataSnapshots <> [];    
+
+viewData : Token ==> DataResponse
+viewData (tok) ==
+let response = if tok not in set {c.tok | c in set cloud.activeClients} then
+                 mk_DataResponse(<InvalidToken>, nil)
+               elseif <Review> not in set tok.roles then
+                 mk_DataResponse(<NoPermission>, nil)
+               else
+                 mk_DataResponse(<NoError>, getCloudData())
+in
+(
+  advanceTime(durations.viewData);
+  return response;
+)
+pre viewDataGuard(State)
+post time~ + durations.viewData = time and
+     (tok not in set {c.tok | c in set cloud~.activeClients} => RESULT.code = <InvalidToken>) and
+     (<Review> not in set tok.roles => RESULT.code = <NoPermission>);
+
+-- Client to cloud
+uploadFirmware : Token * Firmware * nat ==> FirmwareStatusCode
+uploadFirmware (tok, firmware, platformId) ==
+(
+  dcl code : FirmwareStatusCode := undefined;
+  if tok not in set {c.tok | c in set cloud.activeClients} then
+    code := <InvalidToken>
+  elseif  <UploadFirmware> not in set tok.roles then
+    code := <NoPermission>
+  else
+    code := forwardFirmware(firmware, platformId);
+  advanceTime(durations.uploadFirmware);
+  return code;
+)
+post time~ + durations.uploadFirmware = time and
+     platformId in set dom cloud.platforms and 
+     -- The status code must reflect the client's permissions and the firmware
+     (if tok not in set {c.tok | c in set cloud.activeClients} then
+       RESULT = <InvalidToken>
+     elseif <UploadFirmware> not in set tok.roles then
+       RESULT = <NoPermission>
+     elseif not cloud.platforms(platformId).gw.inwardsOpen then
+       RESULT = <GatewayClosed>
+     else
+      if not firmware.validSig then
+        RESULT = <InvalidSignature>
+      elseif not firmware.genuine then
+        RESULT = <NotGenuine>
+      else if not firmware.size then
+        RESULT = <InsufficientStorage>
+      else
+        RESULT = <Valid>) and
+     -- Invalid firmware does not affect the system
+     (not isValid(firmware) => sameStatesExceptForTime(State~, State));
+
+-- Cloud to gateway
+forwardFirmware : Firmware * PlatformId ==> FirmwareStatusCode
+forwardFirmware (firmware, platformId) == 
+(
+  let targetPlatform = cloud.platforms(platformId)
+    in
+      if targetPlatform.gw.inwardsOpen then
+        return deliverFirmware(platformId, firmware)
+      else
+       return <GatewayClosed>;
+)
+pre platformId in set dom cloud.platforms
+post RESULT not in set {<NoPermission>, <InvalidToken>} =>
+       (not cloud.platforms(platformId).gw.inwardsOpen => RESULT = <GatewayClosed>) or
+       ((not firmware.validSig => RESULT = <InvalidSignature>) or
+       (not firmware.genuine => RESULT = <NotGenuine>) or
+       (not firmware.size => RESULT = <InsufficientStorage>) or
+       (isValid(firmware) => RESULT = <Valid>));
+       
+-- OT to Cloud
+
+sendDataToCloud : Data ==> ()
+sendDataToCloud(d) ==
+  cloud.dataSnapshots := cloud.dataSnapshots ^ [d]
+pre d not in set elems cloud.dataSnapshots
+post d in set elems cloud.dataSnapshots;
+
+-- Fetch fleet data (from all platforms)
+fetchData : () ==> ()
+fetchData()==
+let d = genData()
+in
+  sendDataToCloud(d);
+
+-- Gateway to OT
+deliverFirmware : PlatformId * Firmware ==> FirmwareStatusCode
+deliverFirmware (platformId, firmware) ==
+(
+  dcl code : FirmwareStatusCode := computeFirmwareStatus(firmware);
+  if code = <Valid> then
+    atomic
+    (
+      cloud.platforms(platformId).activeOt.fwUpdate := firmware;
+      -- Add the same firmware on the backup OTs
+      cloud.platforms(platformId).backupOts := consOts(cloud.platforms(platformId).backupOts, firmware);
+    );
+  return code;
+)
+pre platformId in set dom cloud.platforms
+post -- The firmware backup on the active OT does not change
+     cloud~.platforms(platformId).activeOt.fwBackup = cloud.platforms(platformId).activeOt.fwBackup and
+     -- The active OT has received the firmware update
+     RESULT = <Valid> => (cloud.platforms(platformId).activeOt.fwUpdate = firmware) and
+     -- The firmware backups of the backup OTs do not change
+
+     -- Note: comparing the backup firmware on the active OT and the
+     -- backup OT is correct because the platform invariant ensures
+     -- that the backup firmware is the same for both the active OT
+     -- and the backup OTs.
+     (forall o in set cloud.platforms(platformId).backupOts & o.fwBackup = cloud~.platforms(platformId).activeOt.fwBackup)  and
+     -- The firmware updates of the backup OTs get updated
+     (RESULT = <Valid> => forall o in set cloud.platforms(platformId).backupOts & o.fwUpdate = firmware);
+
+installFirmware : PlatformId ==> ()
+installFirmware (platformId) ==
+let fwUpdate = cloud.platforms(platformId).activeOt.fwUpdate
+in
+  atomic
+  (
+    -- Install the firmware in the control network
+    cloud.platforms(platformId).cn.fwInstalled := fwUpdate;
+    -- Store a firmware backup on the active OT
+    cloud.platforms(platformId).activeOt.fwBackup := fwUpdate;
+    -- Update the backup OTs to store a copy of the newly installed firmware
+    -- Also remove the backup OTs' firmware update
+    cloud.platforms(platformId).backupOts := {mk_OT(o.id, nil, fwUpdate) |
+      o in set cloud.platforms(platformId).backupOts};
+    -- Remove the active OT's firmware update
+    cloud.platforms(platformId).activeOt.fwUpdate := nil;
+  )
+pre platformId in set dom cloud.platforms and
+    -- The firmware to install must exist
+    cloud.platforms(platformId).activeOt.fwUpdate <> nil
+post -- The firmware update has been removed from the OT's storage
+     cloud.platforms(platformId).activeOt.fwUpdate = nil and
+     let newFirmware = cloud~.platforms(platformId).activeOt.fwUpdate,
+         cnFirmware = cloud.platforms(platformId).cn.fwInstalled,
+         backup = cloud.platforms(platformId).activeOt.fwBackup
+     in
+       -- The firmware is installed in the control network
+       cnFirmware = newFirmware and
+       -- The active OT has a backup of the newly installed firmware
+       backup = newFirmware;
+
+addUser : UserId * Password * set1 of Role ==> ()
+addUser (userId, pwd, roles) ==
+atomic
+(
+  cloud.validUsers := cloud.validUsers munion {userId |-> pwd};
+  cloud.userRoles := cloud.userRoles munion {userId |-> roles}
+)
+pre userId not in set dom cloud.validUsers and userId not in set dom cloud.userRoles
+post (userId in set dom cloud.validUsers and cloud.validUsers(userId) = pwd) and
+     (userId in set dom cloud.userRoles and cloud.userRoles(userId) = roles) and
+     time~ = time;
+
+addUser_ : (UserId * Password * set1 of Role) ==> ()
+addUser_ (mk_(userId, pwd, roles)) == addUser(userId, pwd, roles)
+pre pre_addUser(userId, pwd, roles, State)
+post post_addUser(userId, pwd, roles, State~, State);
+
+addClient : ClientId * Secret ==> ()
+addClient (clientId, secret) ==
+  cloud.validClients := cloud.validClients munion {clientId |-> secret}
+pre clientId not in set dom cloud.validClients
+post clientId in set dom cloud.validClients and cloud.validClients(clientId) = secret and
+     time~ = time;
+
+addClient_ : (ClientId * Secret) ==> ()
+addClient_ (mk_(clientId, secret)) ==
+  addClient(clientId, secret)
+pre pre_addClient(clientId, secret, State)
+post post_addClient(clientId, secret, State~, State);
+
+addPlatform : PlatformId * Platform ==> ()
+addPlatform (id, platform) ==
+  cloud.platforms := cloud.platforms munion {id |-> platform}
+pre id not in set dom cloud.platforms
+post time~ = time and
+     cloud~.platforms munion {id |-> platform} = cloud.platforms;
+
+resetState : () ==> ()
+resetState () == 
+let mk_State(cloud', time', expirationTimeOffset', durations', dataCounter') = consDefaultState()
+in
+(
+  atomic
+  (
+    cloud := cloud';
+    time := time';
+    expirationTimeOffset := expirationTimeOffset';
+    durations := durations';
+    dataCounter := dataCounter';
+  )
+);
+
+pure getSystemState : () ==> State
+getSystemState () == return State;
+
+end System

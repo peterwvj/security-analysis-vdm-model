@@ -1,0 +1,26 @@
+module Time
+
+exports all
+definitions
+
+types
+
+Time = nat;
+
+Durations ::
+  expirationOffset : Time
+  viewData : Time
+  performLogin : Time
+  uploadFirmware : Time
+  installFirmware : Time;
+
+values
+
+-- These are adjustable
+DEFAULT_EXPIRATION_OFFSET = 10;
+VIEW_DATA_DURATION = 1;
+PERFORM_LOGIN_DURATION = 1;
+UPLOAD_FIRMWARE_DURATION = 1;
+INSTALL_FIRMWARE_DURATION = 1;
+
+end Time

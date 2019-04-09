@@ -1,0 +1,91 @@
+module LeakedToken
+
+imports
+from System
+  operations
+    addUser renamed addUser
+    addClient renamed addClient
+    performLogin renamed performLogin
+    getSystemState renamed getSystemState
+  functions
+    performLoginGuard renamed performLoginGuard,
+from Client
+  types
+    Client renamed Client
+    Password renamed Password
+    Secret renamed Secret,
+from UnitTesting
+  values
+    clients renamed clients
+    passwords renamed passwords
+    secrets renamed secrets
+    roles renamed roles
+definitions
+
+state State of
+  currentVictim : [Client]
+  currentAdversary : [Client]
+init s == s = mk_State(nil, nil)
+end
+
+operations
+
+loginClients : Client * Password * Secret *
+               Client * Password * Secret  ==> ()
+loginClients (victim, victimPwd, victimSecret,
+              adversary, adversaryPwd, adversarySecret) ==
+(
+  currentVictim := performLogin(victim, victimPwd, victimSecret);
+  currentAdversary := performLogin(adversary, adversaryPwd, adversarySecret);
+)
+pre let s = getSystemState()
+in
+  performLoginGuard(victim, victimPwd, victimSecret, s) and
+  performLoginGuard(adversary, adversaryPwd, adversarySecret, s);
+
+-- Expects the interpreter to be initialised with the "-exceptions" option
+stealToken : () ==> <TheftPrevented> | <TokenStolen>
+stealToken () ==
+trap <RuntimeError> with
+  return <TheftPrevented>
+in
+(
+  currentAdversary.tok := currentVictim.tok;
+  return <TokenStolen>;
+)
+pre currentAdversary <> nil and currentVictim <> nil
+post currentAdversary <> nil and currentVictim <> nil and
+     currentAdversary.tok = currentVictim.tok;
+
+traces
+
+LeakedToken:
+-- May lead to privilege escalation
+let victim in set clients
+in
+  let adversary in set clients \ {victim}
+  in
+  let vUserId = victim.user.id,
+      vUserPwd = passwords(vUserId),
+      vUserRoles = roles(vUserId),
+      vClientId = victim.id,
+      vClientSecret = secrets(vClientId),
+      aUserId = adversary.user.id,
+      aUserPwd = passwords(aUserId),
+      aUserRoles = roles(aUserId),
+      aClientSecret = secrets(adversary.id)
+
+  in
+  (
+    addUser(vUserId, vUserPwd, vUserRoles);
+    addClient(vClientId, vClientSecret);
+    addUser(aUserId, aUserPwd, aUserRoles);
+    addClient(adversary.id, aClientSecret);
+
+    loginClients(victim, vUserPwd, vClientSecret,
+                 adversary, aUserPwd, aClientSecret);
+
+    stealToken()
+  )
+
+end LeakedToken

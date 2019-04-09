@@ -1,0 +1,217 @@
+module UnitTesting
+imports
+from System
+  operations
+    addUser renamed addUser
+    addClient renamed addClient
+    performLogin renamed performLogin
+    resetState renamed resetState
+    viewData renamed viewData
+    uploadFirmware renamed uploadFirmware
+    openGateway renamed openGateway
+    installFirmware renamed installFirmware
+    fetchData renamed fetchData,
+from Client
+  types
+    Token renamed Token
+    Client renamed Client
+    ClientId renamed ClientId
+    User renamed User
+    UserId renamed UserId
+    Role renamed Role
+    Password renamed Password
+    Secret renamed Secret,
+from Communication
+  types
+    DataResponse renamed DataResponse
+    Firmware renamed Firmware
+  functions
+    consValidFirmware renamed consValidFirmware,
+from IO
+  operations
+    println: ? ==> ()
+    printf: seq of char * seq of ? ==> ()
+exports all
+
+definitions
+
+values
+
+platformId = 1;
+
+user1Id = 1;
+client1Id = 1;
+user1Roles : set1 of Role = {<Review>};
+user1 = mk_User(user1Id);
+user1Pwd = "pwd";
+client1Secret = "sec";
+client1 = mk_Client(1, user1, nil);
+
+user2Id = 2;
+client2Id = 2;
+user2Roles : set of Role = {<UploadFirmware>};
+user2 = mk_User(user2Id);
+user2Pwd = "pwd2";
+client2Secret = "sec2";
+client2 = mk_Client(2, user2, nil);
+
+user3Id = 3;
+client3Id = 3;
+user3Roles : set of Role = {<UploadFirmware>};
+user3 = mk_User(user3Id);
+user3Pwd = "pwd3";
+client3Secret = "sec3";
+client3 = mk_Client(3, user3, nil);
+
+passwords : map UserId to Password = {user1Id |-> user1Pwd, user2Id |-> user2Pwd, user3Id |-> user3Pwd};
+secrets : map ClientId to Secret = {client1Id |-> client1Secret, client2Id |-> client2Secret, client3Id |-> client3Secret};
+roles : map UserId to set of Role = {user1Id |-> user1Roles, user2Id |-> user2Roles, user3Id |-> user3Roles};
+
+clients = {client1, client2, client3}
+
+operations
+
+setup : () ==> ()
+setup () ==
+(
+  resetState();
+  addUser(user1Id, user1Pwd, user1Roles);
+  addUser(user2Id, user2Pwd, user2Roles);
+  addClient(client1Id, client1Secret);
+  addClient(client2Id, client2Secret);
+);
+
+testUserSuccessfulLogin : () ==> seq of char * bool
+testUserSuccessfulLogin () ==
+(
+  setup();
+  let client = performLogin(client1, user1Pwd, client1Secret)
+  in
+    return mk_("testUserSuccessfulLogin: expected login to be successful", client <> nil);
+);
+
+testUserUnsuccessfulLogin : () ==> seq of char * bool
+testUserUnsuccessfulLogin () ==
+(
+  setup();
+  let clientA = performLogin(client1, "wrong_password", client1Secret),
+      clientB = performLogin(client1, user1Pwd, "wrong_secret")      
+  in
+    return mk_("testUserUnsuccessfulLogin: expected login attempts to be unsuccessful", clientA = nil and clientB = nil);
+);
+
+testSuccessfulViewData : () ==> seq of char * bool
+testSuccessfulViewData () ==
+(
+  setup();
+  fetchData();
+  let client = performLogin(client1, user1Pwd, client1Secret),
+      mk_DataResponse(statusCode, -) = viewData(client.tok)
+  in
+    return mk_("testSuccessfulViewData: expected successful view data request", statusCode = <NoError>)
+  
+);
+
+testViewDataInvalidToken : () ==> seq of char * bool
+testViewDataInvalidToken () ==
+let invalidTok = mk_Token(user1Id, client1Id, 0, 10, user1Roles)
+in
+(
+  setup();
+  fetchData();
+  return mk_("testViewDataInvalidToken: expected token to be invalid but it was not considered so by the system", viewData(invalidTok).code = <InvalidToken>);
+);
+
+testViewDataNoPermissions : () ==> seq of char * bool
+testViewDataNoPermissions () ==
+(
+  setup();
+  fetchData();
+  let client = performLogin(client2, user2Pwd, client2Secret)
+  in
+    return mk_("testViewDataNoPermissions: client dos not have permissions to read data yet the client was allowed to do so", viewData(client.tok).code = <NoPermission>)
+);
+
+testSuccessfulFirmwareUpload : () ==> seq of char * bool
+testSuccessfulFirmwareUpload () ==
+(
+  setup();
+  openGateway(platformId);
+  let client = performLogin(client2, user2Pwd, client2Secret),
+      code = uploadFirmware(client.tok, consValidFirmware(), platformId)
+  in
+    return mk_("testSuccessfulFirmwareUpload: expected successful firmware upload", code = <Valid>);
+);
+
+testUploadFirmwareNoPermissions : () ==> seq of char * bool
+testUploadFirmwareNoPermissions () ==
+(
+  setup();
+  let client = performLogin(client1, user1Pwd, client1Secret),
+      code = uploadFirmware(client.tok, consValidFirmware(), platformId)
+  in
+    return mk_("testUploadFirmwareNoPermissions: client does not have permissions to upload firmware yet the client was allowed to do so", code = <NoPermission>);
+);
+
+
+testUploadFirmwareInvalidToken : () ==> seq of char * bool
+testUploadFirmwareInvalidToken () == 
+let invalidTok = mk_Token(user2Id, client2Id, 0, 10, user2Roles)
+in
+(
+  setup();
+  return mk_("testUploadFirmwareInvalidToken: expected token to be invalid but it was not considered so by the system", uploadFirmware(invalidTok, consValidFirmware(), platformId) = <InvalidToken>);
+);
+
+testUploadMaliciousFirmware : () ==> seq of char *  bool
+testUploadMaliciousFirmware () ==
+(
+  setup();
+  openGateway(platformId);
+  let client = performLogin(client2, user2Pwd, client2Secret),
+      code = uploadFirmware(client.tok, mk_Firmware(true, true, false), platformId)
+  in
+    return mk_("testUploadMaliciousFirmware: expected firmware to exceed OT storage", code = <InsufficientStorage>);
+);
+
+testFirmwareInstallation : () ==> seq of char * bool
+testFirmwareInstallation () == 
+(
+  setup();
+  openGateway(platformId);
+  let client = performLogin(client2, user2Pwd, client2Secret),
+      - = uploadFirmware(client.tok, consValidFirmware(), platformId)
+  in
+  (
+    installFirmware(platformId);
+    return mk_("testFirmwareInstallation: succeeded", true);
+  )
+);
+
+runAll : () ==> ()
+runAll () ==
+let testResults = [testUserSuccessfulLogin(),
+                   testUserUnsuccessfulLogin(),
+                   testSuccessfulViewData(),
+                   testViewDataInvalidToken(),
+                   testViewDataNoPermissions(),
+                   testSuccessfulFirmwareUpload(),
+                   testUploadFirmwareNoPermissions(),
+                   testUploadFirmwareInvalidToken(),
+                   testUploadMaliciousFirmware(),
+                   testFirmwareInstallation()]
+in
+(
+  dcl failures : nat := 0;
+  for r in testResults do
+    let mk_(msg, b) = r
+    in
+      if not b then
+      (
+        failures := failures + 1;
+        IO`println("[TEST ERROR] " ^ msg);
+      );
+  IO`printf("Executed %s tests. Failures: %s\n", [len testResults, failures])
+)
+
+end UnitTesting
