@@ -3,6 +3,6 @@
 This repository contains a copy of the VDM-SL model referenced in the
 paper "Security Analysis of Cloud-connected Industrial Control Systems
 using Combinatorial Testing" by Peter W. V. Tran-Jørgensen, Tomas
-Kulik, Jalil Boudjadar, Peter Gorm Larsen.
+Kulik, Jalil Boudjadar and Peter Gorm Larsen.
 
 The repository has been archived in order to keep the model fixed.
